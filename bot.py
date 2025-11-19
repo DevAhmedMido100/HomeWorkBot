@@ -7,6 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.error import TelegramError
 import requests
 import json
+import base64
 from flask import Flask
 
 # إعدادات البوت
@@ -114,6 +115,37 @@ async def check_subscription(user_id, context: CallbackContext):
         logging.error(f"Error checking subscription: {e}")
         return False
 
+# استخراج النص من الصور باستخدام OCR مجاني
+def extract_text_from_image(image_url):
+    try:
+        # استخدام OCR.space API مجاني
+        api_key = "helloworld"  # مفتاح مجاني
+        url = "https://api.ocr.space/parse/image"
+        
+        payload = {
+            'apikey': api_key,
+            'url': image_url,
+            'language': 'ara',
+            'isOverlayRequired': False,
+            'OCREngine': 2
+        }
+        
+        response = requests.post(url, data=payload, timeout=30)
+        result = response.json()
+        
+        if result.get('IsErroredOnProcessing'):
+            return None
+            
+        parsed_results = result.get('ParsedResults', [])
+        if parsed_results:
+            return parsed_results[0].get('ParsedText', '').strip()
+        
+        return None
+        
+    except Exception as e:
+        logging.error(f"OCR error: {e}")
+        return None
+
 # الذكاء الاصطناعي باستخدام Groq API
 async def call_groq_api(prompt, is_math=False):
     try:
@@ -176,7 +208,25 @@ async def call_ai_api(text=None, image_url=None):
             return response
         
         elif image_url:
-            return "تم استلام الصورة بنجاح 🖤.\nحاليا لا يدعم البوت تحليل الصور، لكن يمكنك وصف المحتوى المكتوب في الصورة وسأساعدك 🖤."
+            # استخراج النص من الصورة أولاً
+            extracted_text = extract_text_from_image(image_url)
+            
+            if extracted_text:
+                # معالجة النص المستخرج
+                math_keywords = ['رياضيات', 'math', 'مسألة', 'حل', 'equation', 'جبر', 'هندسة', 'حساب', 'نظرية']
+                is_math = any(keyword in extracted_text.lower() for keyword in math_keywords)
+                
+                prompt = f"""
+تم استخراج النص التالي من الصورة:
+{extracted_text}
+
+يرجى تحليل هذا النص وحل المسألة أو شرح المحتوى:
+                """
+                
+                response = await call_groq_api(prompt, is_math)
+                return f"📸 النص المستخرج من الصورة:\n{extracted_text}\n\n🤖 التحليل:\n{response}"
+            else:
+                return "لم أستطع قراءة النص من الصورة 🖤.\nيرجى التأكد من أن الصورة واضحة وتحوي نصاً مقروءاً، أو حاول إرسال الصورة مرة أخرى 🖤."
             
     except Exception as e:
         logging.error(f"AI API error: {e}")
@@ -215,6 +265,7 @@ async def start(update: Update, context: CallbackContext):
         keyboard = [
             [InlineKeyboardButton("حـل مـسـألـة 🧮", callback_data="solve_math")],
             [InlineKeyboardButton("شـرح دـرس 📚", callback_data="explain_lesson")],
+            [InlineKeyboardButton("تـحـلـيـل صـورة 🖼", callback_data="analyze_image")],
             [InlineKeyboardButton("الـمـسـاعـدة 🆘", callback_data="help")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -222,6 +273,9 @@ async def start(update: Update, context: CallbackContext):
         welcome_text = f"""
 اهـلا بـك يـا {first_name} 🖤.
 في بوت تحليل المسائل والصور ومساعدتك في واجباتك الدراسية 🖤.
+
+⚡ الـبـوت يـدعـم الآن تـحـلـيـل الـصـور 🖼
+📸 يمكنك إرسال صورة تحتوي على مسألة رياضية أو نص دراسي وسأحللها لك 🖤.
 
 اخـتـر واحـدة من الـخـيـارات الـتـالـيـة 🖤.
         """
@@ -281,13 +335,22 @@ async def handle_image(update: Update, context: CallbackContext):
             await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
             return
         
-        await update.message.reply_text("جـاري تـحـلـيـل الـصـورة 🖤.")
-        response = await call_ai_api(image_url="temp_image")
+        # الحصول على الصورة
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        image_url = file.file_path
+        
+        await update.message.reply_text("📸 جـاري تـحـلـيـل الـصـورة واسـتـخـراج الـنـص 🖤.")
+        
+        # إظهار رسالة "جاري الكتابة"
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        
+        response = await call_ai_api(image_url=image_url)
         await update.message.reply_text(response)
     
     except Exception as e:
         logging.error(f"Image handler error: {e}")
-        await update.message.reply_text("عذراً، حدث خطأ في معالجة الصورة 🖤.")
+        await update.message.reply_text("عذراً، حدث خطأ في معالجة الصورة 🖤. حاول مرة أخرى.")
 
 # أوامر المطور
 async def admin_broadcast(update: Update, context: CallbackContext):
@@ -384,6 +447,7 @@ async def admin_stats(update: Update, context: CallbackContext):
 👥 عـدد الـمـسـتـخـدمـيـن: {total_users} 🖤.
 📅 تـاريـخ الـيـوم: {datetime.now().strftime('%Y/%m/%d')} 🖤.
 ⚡ الـبـوت مـشـغـل بـ Groq AI 🖤.
+🖼 يـدعـم تـحـلـيـل الـصـور 🖤.
         """
         await update.message.reply_text(stats_text)
     
@@ -415,15 +479,20 @@ async def button_handler(update: Update, context: CallbackContext):
         elif query.data == "explain_lesson":
             await query.edit_message_text("ارسـل الـدرس الـذي تـريـد شـرحـه 📚.\nوسـأقـوم بـشـرحـه لـك 🖤.")
         
+        elif query.data == "analyze_image":
+            await query.edit_message_text("🖼 ارسـل الـصـورة الـتـي تـريـد تـحـلـيـلـهـا 🖤.\nسـأقـوم بـاسـتـخـراج الـنـص مـنـهـا ثـم تـحـلـيـلـه 🖤.")
+        
         elif query.data == "help":
             help_text = """
 🆘 الـمـسـاعـدة 🖤:
 
 • لـحـل مـسـألـة: اخـتـر "حـل مـسـألـة" 🖤.
 • لـشـرح دـرس: اخـتـر "شـرح دـرس" 🖤.
+• لـتـحـلـيـل صـورة: اخـتـر "تـحـلـيـل صـورة" 🖤.
 • للاتـصـال بـالـمـطـور: @TepthonHelp 🖤.
 
 ⚡ الـبـوت مـشـغـل بـ Groq AI 🖤.
+🖼 يـدعـم تـحـلـيـل الـصـور 🖤.
             """
             await query.edit_message_text(help_text)
     
@@ -482,7 +551,7 @@ def main():
 
 @app.route('/')
 def home():
-    return "البوت يعمل بنجاح 🖤. - مشغل بـ Groq AI"
+    return "البوت يعمل بنجاح 🖤. - مشغل بـ Groq AI - يدعم تحليل الصور"
 
 @app.route('/health')
 def health():
