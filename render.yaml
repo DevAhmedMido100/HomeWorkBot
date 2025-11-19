@@ -7,8 +7,8 @@ services:
     startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
-        value: "8537062188:AAHV6KMEMqVyGqKoCu2VrHA2NQrmwT6Laj4"
-      - key: API_KEY
-        value: "free_temporary_key"
+        value: "8537062188:AAHV6KMEMqVyGqKoCu2VrHA2NQrmwT6Laj4"  # احصل على توكن جديد من @BotFather
+      - key: GROQ_API_KEY
+        value: "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"
       - key: ADMIN_ID
         value: "8087077168"
