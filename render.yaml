@@ -1,14 +1,14 @@
 services:
   - type: web
-    name: telegram-bot
+    name: homework-bot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    buildCommand: "pip install -e ."
+    startCommand: "python bot.py"
     envVars:
       - key: BOT_TOKEN
         value: "8537062188:AAHm1-8869H_MdIZLRITPh0YAInxpAKjqOA"
       - key: API_KEY
-        value: "free_temporary_api_key"
+        value: "free_api_key"
       - key: ADMIN_ID
         value: "8087077168"
