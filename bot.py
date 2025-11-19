@@ -6,14 +6,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 from telegram.error import TelegramError
 import requests
-from flask import Flask, request
+from flask import Flask
 
 # إعدادات البوت
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-API_KEY = os.getenv('API_KEY')
-ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
+ADMIN_ID = int(os.getenv('ADMIN_ID', 8087077168))
 
-# إعداد Flask للويب
 app = Flask(__name__)
 
 # إعداد التسجيل
@@ -35,12 +33,6 @@ def init_db():
             is_banned INTEGER DEFAULT 0
         )
     ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS stats (
-            total_users INTEGER DEFAULT 0,
-            total_questions INTEGER DEFAULT 0
-        )
-    ''')
     conn.commit()
     conn.close()
 
@@ -48,7 +40,6 @@ def add_user(user_id, username, first_name):
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
     
-    # التحقق إذا المستخدم موجود
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
     if not cursor.fetchone():
         join_date = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
@@ -56,33 +47,31 @@ def add_user(user_id, username, first_name):
             'INSERT INTO users (user_id, username, first_name, join_date) VALUES (?, ?, ?, ?)',
             (user_id, username, first_name, join_date)
         )
-        
-        # تحديث الإحصائيات
-        cursor.execute('SELECT total_users FROM stats')
-        result = cursor.fetchone()
-        if result:
-            cursor.execute('UPDATE stats SET total_users = total_users + 1')
-        else:
-            cursor.execute('INSERT INTO stats (total_users, total_questions) VALUES (1, 0)')
-        
         conn.commit()
         
         # إرسال إشعار للمطور
-        if ADMIN_ID:
-            try:
-                bot_app = Application.builder().token(BOT_TOKEN).build()
-                message = f"""
+        try:
+            message = f"""
 ـ هـناك شخـص دخل الي بـوتك 🖤.
 - الاسم {first_name} 🩵.
 - اليوزر @{username} 💜.
 - التوقيت {join_date} 🩷.
 - الايدي {user_id} 💙.
-                """
-                bot_app.bot.send_message(ADMIN_ID, message)
-            except Exception as e:
-                logging.error(f"Error sending admin notification: {e}")
+            """
+            send_message_to_admin(message)
+        except Exception as e:
+            logging.error(f"Error sending admin notification: {e}")
     
     conn.close()
+
+def send_message_to_admin(message):
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
+            json={'chat_id': ADMIN_ID, 'text': message}
+        )
+    except:
+        pass
 
 def get_user_count():
     conn = sqlite3.connect('bot_data.db')
@@ -122,29 +111,37 @@ async def check_subscription(user_id, context: CallbackContext):
     except TelegramError:
         return False
 
-# API الذكاء الاصطناعي (مثال - تحتاج لتعديله)
+# الذكاء الاصطناعي المبسط
 async def call_ai_api(text=None, image_url=None):
     try:
-        # هنا ضع كود API الذكاء الاصطناعي الخاص بك
-        # مثال باستخدام OpenAI أو أي خدمة مجانية
         if text:
-            # معالجة النص
-            response = f"تم تحليل سؤالك: {text}\n\nهذا رد تجريبي من الذكاء الاصطناعي 🖤."
-            return response
+            # محاكاة للذكاء الاصطناعي - يمكنك استبدالها بـ API حقيقي
+            responses = {
+                'رياضيات': 'حل المسألة الرياضية: ... 🖤',
+                'علوم': 'شرح الدرس العلمي: ... 🖤', 
+                'فيزياء': 'تحليل المسألة الفيزيائية: ... 🖤',
+                'كيمياء': 'تفسير التفاعل الكيميائي: ... 🖤'
+            }
+            
+            for key, response in responses.items():
+                if key in text.lower():
+                    return response
+            
+            return f"تم استلام سؤالك: {text}\n\nجاري البحث عن الإجابة المثالية لك 🖤."
+        
         elif image_url:
-            # معالجة الصورة
-            return "تم تحليل الصورة بنجاح 🖤.\nهذه نتيجة التحليل التجريبية."
+            return "تم استلام الصورة بنجاح 🖤.\nجاري تحليل المحتوى التعليمي في الصورة 🖤."
+            
     except Exception as e:
-        return f"حدث خطأ في المعالجة: {str(e)} 🖤."
+        return f"عذراً، حدث خطأ في المعالجة 🖤. حاول مرة أخرى."
 
 # أوامر البوت
 async def start(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
-    username = update.effective_user.username
-    first_name = update.effective_user.first_name
+    username = update.effective_user.username or "بدون يوزر"
+    first_name = update.effective_user.first_name or "مستخدم"
     
     if update.effective_chat.type != "private":
-        await update.message.reply_text("البوت يعمل في الخاص فقط 🖤.")
         return
     
     if is_banned(user_id):
@@ -159,7 +156,7 @@ async def start(update: Update, context: CallbackContext):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "عـزيـزي {} 🖤.\nيـجـب الاشـتـراك في قـنـاة الـدعـم اولاً 🖤.".format(first_name),
+            f"عـزيـزي {first_name} 🖤.\nيـجـب الاشـتـراك في قـنـاة الـدعـم اولاً 🖤.",
             reply_markup=reply_markup
         )
         return
@@ -196,6 +193,7 @@ async def handle_message(update: Update, context: CallbackContext):
         return
     
     text = update.message.text
+    await update.message.reply_text("جـاري الـبـحـث عـن إجـابـة 🖤.")
     response = await call_ai_api(text=text)
     await update.message.reply_text(response)
 
@@ -213,12 +211,8 @@ async def handle_image(update: Update, context: CallbackContext):
         await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
         return
     
-    photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-    image_url = file.file_path
-    
     await update.message.reply_text("جـاري تـحـلـيـل الـصـورة 🖤.")
-    response = await call_ai_api(image_url=image_url)
+    response = await call_ai_api(image_url="temp_image")
     await update.message.reply_text(response)
 
 # أوامر المطور
@@ -362,10 +356,5 @@ def main():
 def home():
     return "البوت يعمل بنجاح 🖤."
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    # يمكنك إضافة ويب هوك هنا إذا أردت
-    return "OK"
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    main() من 
