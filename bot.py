@@ -6,10 +6,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 from telegram.error import TelegramError
 import requests
+import json
 from flask import Flask
 
 # إعدادات البوت
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', 8087077168))
 
 app = Flask(__name__)
@@ -111,28 +113,71 @@ async def check_subscription(user_id, context: CallbackContext):
     except TelegramError:
         return False
 
-# الذكاء الاصطناعي المبسط
+# الذكاء الاصطناعي باستخدام Groq API
+async def call_groq_api(prompt, is_math=False):
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        if is_math:
+            system_message = """أنت مساعد تعليمي متخصص في حل المسائل الرياضية والعلوم. 
+            قدم حلولاً واضحة ومفصلة مع الخطوات.
+            استخدم الرموز الرياضية عندما يكون ذلك مناسبًا.
+            كن دقيقًا وواضحًا في تفسيرك."""
+        else:
+            system_message = """أنت مساعد تعليمي ذكي يساعد الطلاب في واجباتهم المدرسية.
+            قدم إجابات مفيدة وواضحة ومنظمة.
+            إذا كان السؤال غير واضح، اطلب توضيحًا."""
+        
+        data = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_message + "\n\nالرد باللغة العربية دائماً."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
+            ],
+            "model": "llama-3.1-8b-instant",  # نموذج سريع ومجاني
+            "temperature": 0.3,
+            "max_tokens": 1024,
+            "top_p": 1,
+            "stream": False
+        }
+        
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result['choices'][0]['message']['content']
+        else:
+            return f"عذراً، حدث خطأ في المعالجة 🖤. رمز الخطأ: {response.status_code}"
+            
+    except Exception as e:
+        return f"عذراً، حدث خطأ في الاتصال 🖤. حاول مرة أخرى."
+
+# معالجة النصوص والصور
 async def call_ai_api(text=None, image_url=None):
     try:
         if text:
-            responses = {
-                'رياضيات': 'حل المسألة الرياضية: ... 🖤',
-                'علوم': 'شرح الدرس العلمي: ... 🖤', 
-                'فيزياء': 'تحليل المسألة الفيزيائية: ... 🖤',
-                'كيمياء': 'تفسير التفاعل الكيميائي: ... 🖤',
-            }
+            # تحديد إذا كان السؤال رياضياً
+            math_keywords = ['رياضيات', 'math', 'مسألة', 'حل', 'equation', 'جبر', 'هندسة', 'حساب', 'نظرية']
+            is_math = any(keyword in text.lower() for keyword in math_keywords)
             
-            for key, response in responses.items():
-                if key in text.lower():
-                    return response
-            
-            return f"تم استلام سؤالك 🖤.\nجاري البحث عن الإجابة المثالية لك 🖤."
+            response = await call_groq_api(text, is_math)
+            return response
         
         elif image_url:
-            return "تم استلام الصورة بنجاح 🖤.\nجاري تحليل المحتوى التعليمي 🖤."
+            return "تم استلام الصورة بنجاح 🖤.\nحاليا لا يدعم البوت تحليل الصور، لكن يمكنك وصف المحتوى المكتوب في الصورة وسأساعدك 🖤."
             
     except Exception as e:
-        return f"عذراً، حدث خطأ في المعالجة 🖤."
+        return f"عذراً، حدث خطأ في المعالجة 🖤. حاول مرة أخرى."
 
 # أوامر البوت
 async def start(update: Update, context: CallbackContext):
@@ -147,6 +192,7 @@ async def start(update: Update, context: CallbackContext):
         await update.message.reply_text("تم حظرك من استخدام البوت 🖤.")
         return
     
+    # التحقق من الاشتراك
     if not await check_subscription(user_id, context):
         keyboard = [
             [InlineKeyboardButton("اشترك في القناة 🖤", url="https://t.me/TepthonHelp")],
@@ -163,7 +209,7 @@ async def start(update: Update, context: CallbackContext):
     
     keyboard = [
         [InlineKeyboardButton("حـل مـسـألـة 🧮", callback_data="solve_math")],
-        [InlineKeyboardButton("تـحـلـيـل صـورة 🖼", callback_data="analyze_image")],
+        [InlineKeyboardButton("شـرح دـرس 📚", callback_data="explain_lesson")],
         [InlineKeyboardButton("الـمـسـاعـدة 🆘", callback_data="help")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -191,6 +237,10 @@ async def handle_message(update: Update, context: CallbackContext):
         return
     
     text = update.message.text
+    
+    # إظهار رسالة "جاري الكتابة"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
     await update.message.reply_text("جـاري الـبـحـث عـن إجـابـة 🖤.")
     response = await call_ai_api(text=text)
     await update.message.reply_text(response)
@@ -237,7 +287,7 @@ async def admin_broadcast(update: Update, context: CallbackContext):
     
     for user in users:
         try:
-            await context.bot.send_message(user[0], f"📢 إشـعـار:\n\n{message}")
+            await context.bot.send_message(user[0], f"📢 إشـعـار من المطور:\n\n{message}")
             success += 1
         except:
             failed += 1
@@ -292,6 +342,8 @@ async def admin_stats(update: Update, context: CallbackContext):
 📊 إحـصـائـيـات الـبـوت 🖤:
 
 👥 عـدد الـمـسـتـخـدمـيـن: {total_users} 🖤.
+📅 تـاريـخ الـيـوم: {datetime.now().strftime('%Y/%m/%d')} 🖤.
+⚡ الـبـوت مـشـغـل بـ Groq AI 🖤.
     """
     await update.message.reply_text(stats_text)
 
@@ -308,23 +360,25 @@ async def button_handler(update: Update, context: CallbackContext):
     
     if query.data == "check_subscription":
         if await check_subscription(user_id, context):
-            await query.edit_message_text("شـكـراً لاشـتـراكـك 🖤.\nاسـتـخـدم /start 🖤.")
+            await query.edit_message_text("شـكـراً لاشـتـراكـك 🖤.\nاسـتـخـدم /start لـبـدء الاسـتـخـدام 🖤.")
         else:
-            await query.edit_message_text("لـم يـتـم الاشـتـراك بـعـد 🖤.")
+            await query.edit_message_text("لـم يـتـم الاشـتـراك بـعـد 🖤.\nاشـتـرك ثـم اعـد المحاولة 🖤.")
     
     elif query.data == "solve_math":
-        await query.edit_message_text("ارسـل الـمـسـألـة 🧮.\nوسـأحـاول حـلـهـا لـك 🖤.")
+        await query.edit_message_text("ارسـل الـمـسـألـة الـريـاضـيـة 🧮.\nوسـأحـاول حـلـهـا لـك 🖤.")
     
-    elif query.data == "analyze_image":
-        await query.edit_message_text("ارسـل الـصـورة 🖼.\nوسـأقـوم بـتـحـلـيـلـهـا 🖤.")
+    elif query.data == "explain_lesson":
+        await query.edit_message_text("ارسـل الـدرس الـذي تـريـد شـرحـه 📚.\nوسـأقـوم بـشـرحـه لـك 🖤.")
     
     elif query.data == "help":
         help_text = """
 🆘 الـمـسـاعـدة 🖤:
 
 • لـحـل مـسـألـة: اخـتـر "حـل مـسـألـة" 🖤.
-• لـتـحـلـيـل صـورة: اخـتـر "تـحـلـيـل صـورة" 🖤.
-• للاتـصـال: @TepthonHelp 🖤.
+• لـشـرح دـرس: اخـتـر "شـرح دـرس" 🖤.
+• للاتـصـال بـالـمـطـور: @TepthonHelp 🖤.
+
+⚡ الـبـوت مـشـغـل بـ Groq AI 🖤.
         """
         await query.edit_message_text(help_text)
 
@@ -349,7 +403,7 @@ def main():
 
 @app.route('/')
 def home():
-    return "البوت يعمل بنجاح 🖤."
+    return "البوت يعمل بنجاح 🖤. - مشغل بـ Groq AI"
 
 if __name__ == '__main__':
     main()
