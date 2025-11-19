@@ -6,8 +6,11 @@ services:
       buildpacks:
         - python
     plan: free
-    environment:
-      BOT_TOKEN: "8537062188:AAHm1-8869H_MdIZLRITPh0YAInxpAKjqOA"
-      API_KEY: "YOUR_AI_API_KEY_HERE"
-      ADMIN_ID: "8087077168"
+    envVars:
+      - key: BOT_TOKEN
+        value: "8537062188:AAHm1-8869H_MdIZLRITPh0YAInxpAKjqOA"
+      - key: API_KEY
+        value: "1"
+      - key: ADMIN_ID
+        value: "8087077168"
     webCommand: "python bot.py"
