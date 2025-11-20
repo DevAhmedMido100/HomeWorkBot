@@ -13,6 +13,13 @@ from flask import Flask
 from PIL import Image
 import pytesseract
 
+# محاولة استيراد EasyOCR (اختياري — استخدمه كخطة احتياطية)
+easyocr_reader = None
+try:
+    import easyocr
+except Exception:
+    easyocr = None
+
 # إعدادات البوت
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
@@ -172,7 +179,7 @@ async def call_groq_api(prompt, is_math=False):
         logging.error(f"Groq API error: {e}")
         return f"عذراً، حدث خطأ في الاتصال 🖤. حاول مرة أخرى."
 
-# معالجة النصوص (لم يتغير) — الصور سنعالجها في handle_image باستخدام pytesseract
+# معالجة النصوص (لم يتغير) — الصور سنعالجها في handle_image باستخدام pytesseract و EasyOCR كاحتياط
 async def call_ai_api(text=None, image_url=None):
     try:
         if text:
@@ -256,8 +263,9 @@ async def handle_message(update: Update, context: CallbackContext):
     response = await call_ai_api(text=text)
     await update.message.reply_text(response)
 
-# **تعديل بسيط هنا**: استخدام pytesseract لقراءة النص من الصورة (SCR) ثم إرسال النص إلى Groq لحله/شرحه
+# **تعديل**: استخدام pytesseract ثم EasyOCR كخطة احتياطية
 async def handle_image(update: Update, context: CallbackContext):
+    global easyocr_reader
     user_id = update.effective_user.id
     
     if update.effective_chat.type != "private":
@@ -274,29 +282,63 @@ async def handle_image(update: Update, context: CallbackContext):
     await update.message.reply_text("جـاري تـحـلـيـل الـصـورة وقراءة النص 🖤.")
     
     try:
-        # تنزيل الصورة
-        # نأخذ أعلى جودة متاحة من الصور المرسلة
+        # تنزيل الصورة (أعلى جودة)
         photo = update.message.photo[-1]
         file = await photo.get_file()
         path = f"tmp_image_{user_id}_{int(datetime.now().timestamp())}.jpg"
         await file.download_to_drive(path)
         
-        # محاولة قراءة النص من الصورة باستخدام pytesseract
+        extracted_text = ""
+        ocr_attempts = []
+        
+        # محاولة 1: pytesseract بالعربية
         try:
             img = Image.open(path)
-            # استخدم 'ara' لو منصب tesseract مع حزمة اللغة العربية
-            extracted_text = pytesseract.image_to_string(img, lang='ara').strip()
+            text_ara = pytesseract.image_to_string(img, lang='ara').strip()
+            if text_ara:
+                extracted_text = text_ara
+                ocr_attempts.append(("pytesseract/ara", text_ara))
         except Exception as e:
-            logging.error(f"OCR error: {e}")
-            extracted_text = ""
+            logging.error(f"OCR pytesseract (ara) error: {e}")
+            ocr_attempts.append(("pytesseract/ara", f"error:{e}"))
         
-        # حذف الملف المؤقت مبكراً
+        # محاولة 2: pytesseract بالانجليزي كنسخة احتياطية
+        if not extracted_text:
+            try:
+                text_eng = pytesseract.image_to_string(img, lang='eng').strip()
+                if text_eng:
+                    extracted_text = text_eng
+                    ocr_attempts.append(("pytesseract/eng", text_eng))
+            except Exception as e:
+                logging.error(f"OCR pytesseract (eng) error: {e}")
+                ocr_attempts.append(("pytesseract/eng", f"error:{e}"))
+        
+        # محاولة 3: EasyOCR (لو متوفر)
+        if not extracted_text and easyocr is not None:
+            try:
+                if easyocr_reader is None:
+                    # تهيئة القارئ (قد تأخذ وقت أثناء التشغيل الأول)
+                    easyocr_reader = easyocr.Reader(['ar','en'], gpu=False)
+                results = easyocr_reader.readtext(path)
+                if results:
+                    parts = [r[1] for r in results if len(r) > 1 and r[1].strip()]
+                    easy_text = " ".join(parts).strip()
+                    if easy_text:
+                        extracted_text = easy_text
+                        ocr_attempts.append(("easyocr", easy_text))
+            except Exception as e:
+                logging.error(f"EasyOCR error: {e}")
+                ocr_attempts.append(("easyocr", f"error:{e}"))
+        
+        # حذف الملف المؤقت
         try:
             os.remove(path)
         except:
             pass
         
+        # لو ما قدرنا نستخرج نص
         if not extracted_text:
+            logging.info(f"OCR attempts: {ocr_attempts}")
             await update.message.reply_text("لم أستطع قراءة نص واضح من الصورة 🖤.\nحاول إرسال صورة أوضح أو اكتب السؤال يدوياً.")
             return
         
