@@ -8,7 +8,7 @@ from telegram.error import TelegramError
 import requests
 import json
 from flask import Flask
-import base64  # تمّت الإضافة لتحويل الصورة إلى base64 قبل إرسالها إلى Groq
+import base64  # لتحويل الصورة إلى base64 قبل إرسالها إلى Groq
 
 # إعدادات البوت
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -73,8 +73,8 @@ def send_message_to_admin(message):
             f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
             json={'chat_id': ADMIN_ID, 'text': message}
         )
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"send_message_to_admin error: {e}")
 
 def get_user_count():
     conn = sqlite3.connect('bot_data.db')
@@ -111,7 +111,8 @@ async def check_subscription(user_id, context: CallbackContext):
     try:
         chat_member = await context.bot.get_chat_member('@TepthonHelp', user_id)
         return chat_member.status in ['member', 'administrator', 'creator']
-    except TelegramError:
+    except TelegramError as e:
+        logging.error(f"check_subscription error: {e}")
         return False
 
 # الذكاء الاصطناعي باستخدام Groq API (نصوص)
@@ -156,66 +157,106 @@ async def call_groq_api(prompt, is_math=False):
         
         if response.status_code == 200:
             result = response.json()
-            # تعامُل آمن مع بنية الاستجابة
             try:
                 return result['choices'][0]['message']['content']
-            except:
+            except Exception:
                 return json.dumps(result)
         else:
+            logging.error(f"call_groq_api HTTP {response.status_code}: {response.text}")
             return f"عذراً، حدث خطأ في المعالجة 🖤. رمز الخطأ: {response.status_code}"
             
     except Exception as e:
         logging.error(f"Groq API error: {e}")
         return f"عذراً، حدث خطأ في الاتصال 🖤. حاول مرة أخرى."
 
-# ---- الدالة الجديدة: إرسال صورة + prompt إلى Groq (نموذج رؤية إن توفر) ----
+# ---- الدالة الرئيسية: إرسال صورة + prompt إلى Groq Vision (محاولة صيغ متعددة للتماشي مع API) ----
 async def call_groq_api_with_image(image_path, prompt_text):
     """
-    يقرأ الصورة من image_path، يحولها إلى base64، ويرسلها مع prompt_text إلى Groq.
-    ملاحظة: قد تحتاج تعديل حقل 'model' إلى موديل رؤية مُتاح لحسابك في Groq.
+    يحاول إرسال الصورة إلى Groq Vision بصيغتين مختلفتين للـ payload.
+    - تأكد أن مفتاح GROQ_API_KEY عندك يدعم موديلات الرؤية.
+    - عدّل 'model' إذا لدى حسابك اسم موديل رؤية مختلف.
     """
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # اقرأ وحوّل الصورة إلى base64
     try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        # اقرأ الصورة وحولها إلى base64
         with open(image_path, "rb") as f:
             img_bytes = f.read()
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-        # بناء محتوى الرسالة: نرسل صورة كـ input_image متبوعة بنص التوجيه
-        # هذه البنية تعمل مع بعض واجهات Groq Vision — قد تحتاج تعديل لو كانت واجهتك مختلفة
-        message_content = [
-            {"type": "input_image", "image": f"data:image/jpeg;base64,{img_b64}"},
-            {"type": "input_text", "text": prompt_text}
+    except Exception as e:
+        logging.error(f"Error reading image for base64: {e}")
+        return "عذراً، حدث خطأ في قراءة الصورة 🖤."
+
+    # حاول الصيغة (A): تضمين الحقل "image" داخل رسالة role=user
+    payload_a = {
+        "model": "llama-3.2-90b-vision-preview",  # عدّل لو موديلك مختلف
+        "temperature": 0.2,
+        "max_tokens": 1500,
+        "top_p": 1,
+        "stream": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt_text,
+                "image": f"data:image/jpeg;base64,{img_b64}"
+            }
         ]
-        data = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": message_content
-                }
-            ],
-            # ملاحظة: غيّر اسم الموديل إذا كان لدى حسابك موديل رؤية مختلف
-            "model": "llama-3.2-90b-vision-preview",
-            "temperature": 0.2,
-            "max_tokens": 1500,
-            "top_p": 1,
-            "stream": False
-        }
-        resp = requests.post(url, headers=headers, json=data, timeout=60)
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload_a, timeout=60)
         if resp.status_code == 200:
             j = resp.json()
             try:
                 return j['choices'][0]['message']['content']
-            except:
+            except Exception:
                 return json.dumps(j)
         else:
-            logging.error(f"Groq image API HTTP {resp.status_code}: {resp.text}")
-            return f"عذراً، حدث خطأ في معالجة الصورة 🖤. رمز الخطأ: {resp.status_code}"
+            logging.warning(f"Groq image attempt A HTTP {resp.status_code}: {resp.text}")
     except Exception as e:
-        logging.error(f"call_groq_api_with_image error: {e}")
+        logging.error(f"Groq image attempt A exception: {e}")
+
+    # إذا فشل، حاول الصيغة (B): content كقائمة عناصر input_image + input_text
+    payload_b = {
+        "model": "llama-3.2-90b-vision-preview",
+        "temperature": 0.2,
+        "max_tokens": 1500,
+        "top_p": 1,
+        "stream": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image": f"data:image/jpeg;base64,{img_b64}"},
+                    {"type": "input_text", "text": prompt_text}
+                ]
+            }
+        ]
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload_b, timeout=60)
+        if resp.status_code == 200:
+            j = resp.json()
+            try:
+                return j['choices'][0]['message']['content']
+            except Exception:
+                return json.dumps(j)
+        else:
+            logging.error(f"Groq image attempt B HTTP {resp.status_code}: {resp.text}")
+            # حاول قراءة الخطأ التفصيلي وإرجاعه للمستخدم بصيغة مفهومة
+            try:
+                err_body = resp.json()
+                logging.error(f"Groq error body: {err_body}")
+                return f"عذراً، فشل Groq في معالجة الصورة 🖤. رمز الخطأ: {resp.status_code}"
+            except Exception:
+                return f"عذراً، فشل Groq في معالجة الصورة 🖤. رمز الخطأ: {resp.status_code}"
+    except Exception as e:
+        logging.error(f"Groq image attempt B exception: {e}")
         return "عذراً، فشل إرسال الصورة إلى نموذج Groq 🖤."
 
 # معالجة النصوص والصور (القديمة)
@@ -336,7 +377,7 @@ async def handle_image(update: Update, context: CallbackContext):
             "أجب باللغة العربية وبنبرة ودودة ومناسبة للطلاب."
         )
         
-        # استدعاء Groq مع الصورة والنص
+        # استدعاء Groq مع الصورة والنص (تجربة صيغ متعددة داخل الدالة)
         response = await call_groq_api_with_image(path, prompt_text)
         
         # حذف الملف المؤقت
@@ -383,7 +424,8 @@ async def admin_broadcast(update: Update, context: CallbackContext):
         try:
             await context.bot.send_message(user[0], f"📢 إشـعـار من المطور:\n\n{message}")
             success += 1
-        except:
+        except Exception as e:
+            logging.error(f"broadcast send error to {user[0]}: {e}")
             failed += 1
     
     await update.message.reply_text(f"تم الارسال 🖤.\nنجح: {success} 🖤.\nفشل: {failed} 🖤.")
@@ -433,7 +475,7 @@ async def admin_stats(update: Update, context: CallbackContext):
     
     total_users = get_user_count()
     stats_text = f"""
-📊 إحـصـائـيـات الـبـوت 🖤:
+📊 إحـصـائـيات الـبـوت 🖤:
 
 👥 عـدد الـمـسـتـخـدمـيـن: {total_users} 🖤.
 📅 تـاريـخ الـيـوم: {datetime.now().strftime('%Y/%m/%d')} 🖤.
