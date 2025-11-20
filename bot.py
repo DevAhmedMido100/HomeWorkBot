@@ -8,6 +8,7 @@ from telegram.error import TelegramError
 import requests
 import json
 from flask import Flask
+import base64  # تمّت الإضافة لتحويل الصورة إلى base64 قبل إرسالها إلى Groq
 
 # إعدادات البوت
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -113,7 +114,7 @@ async def check_subscription(user_id, context: CallbackContext):
     except TelegramError:
         return False
 
-# الذكاء الاصطناعي باستخدام Groq API
+# الذكاء الاصطناعي باستخدام Groq API (نصوص)
 async def call_groq_api(prompt, is_math=False):
     try:
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -144,7 +145,7 @@ async def call_groq_api(prompt, is_math=False):
                     "content": prompt
                 }
             ],
-            "model": "llama-3.1-8b-instant",  # نموذج سريع ومجاني
+            "model": "llama-3.1-8b-instant",  # نموذج نصي
             "temperature": 0.3,
             "max_tokens": 1024,
             "top_p": 1,
@@ -155,14 +156,69 @@ async def call_groq_api(prompt, is_math=False):
         
         if response.status_code == 200:
             result = response.json()
-            return result['choices'][0]['message']['content']
+            # تعامُل آمن مع بنية الاستجابة
+            try:
+                return result['choices'][0]['message']['content']
+            except:
+                return json.dumps(result)
         else:
             return f"عذراً، حدث خطأ في المعالجة 🖤. رمز الخطأ: {response.status_code}"
             
     except Exception as e:
+        logging.error(f"Groq API error: {e}")
         return f"عذراً، حدث خطأ في الاتصال 🖤. حاول مرة أخرى."
 
-# معالجة النصوص والصور
+# ---- الدالة الجديدة: إرسال صورة + prompt إلى Groq (نموذج رؤية إن توفر) ----
+async def call_groq_api_with_image(image_path, prompt_text):
+    """
+    يقرأ الصورة من image_path، يحولها إلى base64، ويرسلها مع prompt_text إلى Groq.
+    ملاحظة: قد تحتاج تعديل حقل 'model' إلى موديل رؤية مُتاح لحسابك في Groq.
+    """
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        # اقرأ الصورة وحولها إلى base64
+        with open(image_path, "rb") as f:
+            img_bytes = f.read()
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        # بناء محتوى الرسالة: نرسل صورة كـ input_image متبوعة بنص التوجيه
+        # هذه البنية تعمل مع بعض واجهات Groq Vision — قد تحتاج تعديل لو كانت واجهتك مختلفة
+        message_content = [
+            {"type": "input_image", "image": f"data:image/jpeg;base64,{img_b64}"},
+            {"type": "input_text", "text": prompt_text}
+        ]
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": message_content
+                }
+            ],
+            # ملاحظة: غيّر اسم الموديل إذا كان لدى حسابك موديل رؤية مختلف
+            "model": "llama-3.2-90b-vision-preview",
+            "temperature": 0.2,
+            "max_tokens": 1500,
+            "top_p": 1,
+            "stream": False
+        }
+        resp = requests.post(url, headers=headers, json=data, timeout=60)
+        if resp.status_code == 200:
+            j = resp.json()
+            try:
+                return j['choices'][0]['message']['content']
+            except:
+                return json.dumps(j)
+        else:
+            logging.error(f"Groq image API HTTP {resp.status_code}: {resp.text}")
+            return f"عذراً، حدث خطأ في معالجة الصورة 🖤. رمز الخطأ: {resp.status_code}"
+    except Exception as e:
+        logging.error(f"call_groq_api_with_image error: {e}")
+        return "عذراً، فشل إرسال الصورة إلى نموذج Groq 🖤."
+
+# معالجة النصوص والصور (القديمة)
 async def call_ai_api(text=None, image_url=None):
     try:
         if text:
@@ -177,6 +233,7 @@ async def call_ai_api(text=None, image_url=None):
             return "تم استلام الصورة بنجاح 🖤.\nحاليا لا يدعم البوت تحليل الصور، لكن يمكنك وصف المحتوى المكتوب في الصورة وسأساعدك 🖤."
             
     except Exception as e:
+        logging.error(f"AI API error: {e}")
         return f"عذراً، حدث خطأ في المعالجة 🖤. حاول مرة أخرى."
 
 # أوامر البوت
@@ -245,6 +302,7 @@ async def handle_message(update: Update, context: CallbackContext):
     response = await call_ai_api(text=text)
     await update.message.reply_text(response)
 
+# **التعديل هنا فقط**: تحليل الصورة عبر Groq Vision وإرجاع حل/شرح
 async def handle_image(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     
@@ -259,9 +317,45 @@ async def handle_image(update: Update, context: CallbackContext):
         await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
         return
     
-    await update.message.reply_text("جـاري تـحـلـيـل الـصـورة 🖤.")
-    response = await call_ai_api(image_url="temp_image")
-    await update.message.reply_text(response)
+    await update.message.reply_text("جـاري تـحـلـيـل الـصـورة وطلب الحل من Groq 🖤...")
+    
+    try:
+        # تنزيل الصورة
+        photo = update.message.photo[-1]
+        file = await photo.get_file()
+        path = f"temp_image_{user_id}_{int(datetime.now().timestamp())}.jpg"
+        await file.download_to_drive(path)
+        
+        # إعداد prompt واضح لطلب حل المسائل وشرحها باللغة العربية
+        prompt_text = (
+            "أنت مساعد تعليمي. في الصورة المرفقة يوجد سؤال/أسئلة مدرسية (رياضيات/فيزياء/كيمياء أو مسائل حسابية). "
+            "اقرأ ما في الصورة، استخرج كل مسألة، ثم: \n"
+            "1) اكتب النتيجة الصحيحة لكل مسألة.\n"
+            "2) اشرح خطوات الحل خطوة بخطوة بشكل واضح للطالب.\n"
+            "3) إذا كان هناك أخطاء شائعة، أشِر إليها ووضح التصحيح.\n"
+            "أجب باللغة العربية وبنبرة ودودة ومناسبة للطلاب."
+        )
+        
+        # استدعاء Groq مع الصورة والنص
+        response = await call_groq_api_with_image(path, prompt_text)
+        
+        # حذف الملف المؤقت
+        try:
+            os.remove(path)
+        except:
+            pass
+        
+        # تقسيم الرد لو طويل
+        if isinstance(response, str) and len(response) > 4000:
+            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            for part in parts:
+                await update.message.reply_text(part)
+        else:
+            await update.message.reply_text(response)
+    
+    except Exception as e:
+        logging.error(f"Image handler error: {e}")
+        await update.message.reply_text("عذراً، حدث خطأ في معالجة الصورة 🖤.")
 
 # أوامر المطور
 async def admin_broadcast(update: Update, context: CallbackContext):
