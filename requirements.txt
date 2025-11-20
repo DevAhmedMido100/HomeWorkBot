@@ -4,4 +4,3 @@ requests==2.31.0
 python-dotenv==1.0.0
 pytesseract
 Pillow
-easyocr==1.7.1
