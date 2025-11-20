@@ -110,8 +110,7 @@ async def check_subscription(user_id, context: CallbackContext):
     try:
         chat_member = await context.bot.get_chat_member('@TepthonHelp', user_id)
         return chat_member.status in ['member', 'administrator', 'creator']
-    except TelegramError as e:
-        logging.error(f"Error checking subscription: {e}")
+    except TelegramError:
         return False
 
 # الذكاء الاصطناعي باستخدام Groq API
@@ -145,7 +144,7 @@ async def call_groq_api(prompt, is_math=False):
                     "content": prompt
                 }
             ],
-            "model": "llama-3.1-8b-instant",
+            "model": "llama-3.1-8b-instant",  # نموذج سريع ومجاني
             "temperature": 0.3,
             "max_tokens": 1024,
             "top_p": 1,
@@ -161,7 +160,6 @@ async def call_groq_api(prompt, is_math=False):
             return f"عذراً، حدث خطأ في المعالجة 🖤. رمز الخطأ: {response.status_code}"
             
     except Exception as e:
-        logging.error(f"Groq API error: {e}")
         return f"عذراً، حدث خطأ في الاتصال 🖤. حاول مرة أخرى."
 
 # معالجة النصوص والصور
@@ -179,244 +177,201 @@ async def call_ai_api(text=None, image_url=None):
             return "تم استلام الصورة بنجاح 🖤.\nحاليا لا يدعم البوت تحليل الصور، لكن يمكنك وصف المحتوى المكتوب في الصورة وسأساعدك 🖤."
             
     except Exception as e:
-        logging.error(f"AI API error: {e}")
         return f"عذراً، حدث خطأ في المعالجة 🖤. حاول مرة أخرى."
 
 # أوامر البوت
 async def start(update: Update, context: CallbackContext):
-    try:
-        user_id = update.effective_user.id
-        username = update.effective_user.username or "بدون يوزر"
-        first_name = update.effective_user.first_name or "مستخدم"
-        
-        if update.effective_chat.type != "private":
-            await update.message.reply_text("البوت يعمل في الخاص فقط 🖤.")
-            return
-        
-        if is_banned(user_id):
-            await update.message.reply_text("تم حظرك من استخدام البوت 🖤.")
-            return
-        
-        # التحقق من الاشتراك
-        if not await check_subscription(user_id, context):
-            keyboard = [
-                [InlineKeyboardButton("اشترك في القناة 🖤", url="https://t.me/TepthonHelp")],
-                [InlineKeyboardButton("تـفـعـيـل 🖤", callback_data="check_subscription")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                f"عـزيـزي {first_name} 🖤.\nيـجـب الاشـتـراك في قـنـاة الـدعـم اولاً 🖤.",
-                reply_markup=reply_markup
-            )
-            return
-        
-        add_user(user_id, username, first_name)
-        
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "بدون يوزر"
+    first_name = update.effective_user.first_name or "مستخدم"
+    
+    if update.effective_chat.type != "private":
+        return
+    
+    if is_banned(user_id):
+        await update.message.reply_text("تم حظرك من استخدام البوت 🖤.")
+        return
+    
+    # التحقق من الاشتراك
+    if not await check_subscription(user_id, context):
         keyboard = [
-            [InlineKeyboardButton("حـل مـسـألـة 🧮", callback_data="solve_math")],
-            [InlineKeyboardButton("شـرح دـرس 📚", callback_data="explain_lesson")],
-            [InlineKeyboardButton("الـمـسـاعـدة 🆘", callback_data="help")]
+            [InlineKeyboardButton("اشترك في القناة 🖤", url="https://t.me/TepthonHelp")],
+            [InlineKeyboardButton("تـفـعـيـل 🖤", callback_data="check_subscription")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        welcome_text = f"""
+        await update.message.reply_text(
+            f"عـزيـزي {first_name} 🖤.\nيـجـب الاشـتـراك في قـنـاة الـدعـم اولاً 🖤.",
+            reply_markup=reply_markup
+        )
+        return
+    
+    add_user(user_id, username, first_name)
+    
+    keyboard = [
+        [InlineKeyboardButton("حـل مـسـألـة 🧮", callback_data="solve_math")],
+        [InlineKeyboardButton("شـرح دـرس 📚", callback_data="explain_lesson")],
+        [InlineKeyboardButton("الـمـسـاعـدة 🆘", callback_data="help")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = f"""
 اهـلا بـك يـا {first_name} 🖤.
 في بوت تحليل المسائل والصور ومساعدتك في واجباتك الدراسية 🖤.
 
 اخـتـر واحـدة من الـخـيـارات الـتـالـيـة 🖤.
-        """
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
-    
-    except Exception as e:
-        logging.error(f"Start command error: {e}")
-        await update.message.reply_text("عذراً، حدث خطأ 🖤. حاول مرة أخرى.")
+    """
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
 async def handle_message(update: Update, context: CallbackContext):
-    try:
-        user_id = update.effective_user.id
-        
-        if update.effective_chat.type != "private":
-            return
-        
-        if is_banned(user_id):
-            await update.message.reply_text("تم حظرك من استخدام البوت 🖤.")
-            return
-        
-        if not await check_subscription(user_id, context):
-            await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
-            return
-        
-        text = update.message.text
-        
-        # إظهار رسالة "جاري الكتابة"
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        
-        processing_msg = await update.message.reply_text("جـاري الـبـحـث عـن إجـابـة 🖤.")
-        response = await call_ai_api(text=text)
-        
-        # تقسيم الرد إذا كان طويلاً
-        if len(response) > 4000:
-            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for part in parts:
-                await update.message.reply_text(part)
-        else:
-            await update.message.reply_text(response)
+    user_id = update.effective_user.id
     
-    except Exception as e:
-        logging.error(f"Message handler error: {e}")
-        await update.message.reply_text("عذراً، حدث خطأ في المعالجة 🖤. حاول مرة أخرى.")
+    if update.effective_chat.type != "private":
+        return
+    
+    if is_banned(user_id):
+        await update.message.reply_text("تم حظرك من استخدام البوت 🖤.")
+        return
+    
+    if not await check_subscription(user_id, context):
+        await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
+        return
+    
+    text = update.message.text
+    
+    # إظهار رسالة "جاري الكتابة"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
+    await update.message.reply_text("جـاري الـبـحـث عـن إجـابـة 🖤.")
+    response = await call_ai_api(text=text)
+    await update.message.reply_text(response)
 
 async def handle_image(update: Update, context: CallbackContext):
-    try:
-        user_id = update.effective_user.id
-        
-        if update.effective_chat.type != "private":
-            return
-        
-        if is_banned(user_id):
-            await update.message.reply_text("تم حظرك من استخدام البوت 🖤.")
-            return
-        
-        if not await check_subscription(user_id, context):
-            await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
-            return
-        
-        await update.message.reply_text("جـاري تـحـلـيـل الـصـورة 🖤.")
-        response = await call_ai_api(image_url="temp_image")
-        await update.message.reply_text(response)
+    user_id = update.effective_user.id
     
-    except Exception as e:
-        logging.error(f"Image handler error: {e}")
-        await update.message.reply_text("عذراً، حدث خطأ في معالجة الصورة 🖤.")
+    if update.effective_chat.type != "private":
+        return
+    
+    if is_banned(user_id):
+        await update.message.reply_text("تم حظرك من استخدام البوت 🖤.")
+        return
+    
+    if not await check_subscription(user_id, context):
+        await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
+        return
+    
+    await update.message.reply_text("جـاري تـحـلـيـل الـصـورة 🖤.")
+    response = await call_ai_api(image_url="temp_image")
+    await update.message.reply_text(response)
 
 # أوامر المطور
 async def admin_broadcast(update: Update, context: CallbackContext):
-    try:
-        user_id = update.effective_user.id
-        
-        if user_id != ADMIN_ID:
-            await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
-            return
-        
-        if not context.args:
-            await update.message.reply_text("اسـتـخـدم: /broadcast <الرسالة> 🖤.")
-            return
-        
-        message = " ".join(context.args)
-        conn = sqlite3.connect('bot_data.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id FROM users WHERE is_banned = 0')
-        users = cursor.fetchall()
-        conn.close()
-        
-        success = 0
-        failed = 0
-        
-        for user in users:
-            try:
-                await context.bot.send_message(user[0], f"📢 إشـعـار من المطور:\n\n{message}")
-                success += 1
-            except:
-                failed += 1
-        
-        await update.message.reply_text(f"تم الارسال 🖤.\nنجح: {success} 🖤.\nفشل: {failed} 🖤.")
+    user_id = update.effective_user.id
     
-    except Exception as e:
-        logging.error(f"Broadcast error: {e}")
-        await update.message.reply_text("حدث خطأ في الإذاعة 🖤.")
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("اسـتـخـدم: /broadcast <الرسالة> 🖤.")
+        return
+    
+    message = " ".join(context.args)
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id FROM users WHERE is_banned = 0')
+    users = cursor.fetchall()
+    conn.close()
+    
+    success = 0
+    failed = 0
+    
+    for user in users:
+        try:
+            await context.bot.send_message(user[0], f"📢 إشـعـار من المطور:\n\n{message}")
+            success += 1
+        except:
+            failed += 1
+    
+    await update.message.reply_text(f"تم الارسال 🖤.\nنجح: {success} 🖤.\nفشل: {failed} 🖤.")
 
 async def admin_ban(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("اسـتـخـدم: /ban <user_id> 🖤.")
+        return
+    
     try:
-        user_id = update.effective_user.id
-        
-        if user_id != ADMIN_ID:
-            await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
-            return
-        
-        if not context.args:
-            await update.message.reply_text("اسـتـخـدم: /ban <user_id> 🖤.")
-            return
-        
         target_id = int(context.args[0])
         ban_user(target_id)
         await update.message.reply_text(f"تم حـظـر الـمـسـتـخـدم {target_id} 🖤.")
-    
     except ValueError:
         await update.message.reply_text("رقـم الـمـسـتـخـدم غـيـر صـحـيـح 🖤.")
-    except Exception as e:
-        logging.error(f"Ban error: {e}")
-        await update.message.reply_text("حدث خطأ في الحظر 🖤.")
 
 async def admin_unban(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("اسـتـخـدم: /unban <user_id> 🖤.")
+        return
+    
     try:
-        user_id = update.effective_user.id
-        
-        if user_id != ADMIN_ID:
-            await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
-            return
-        
-        if not context.args:
-            await update.message.reply_text("اسـتـخـدم: /unban <user_id> 🖤.")
-            return
-        
         target_id = int(context.args[0])
         unban_user(target_id)
         await update.message.reply_text(f"تم فـك حـظـر الـمـسـتـخـدم {target_id} 🖤.")
-    
     except ValueError:
         await update.message.reply_text("رقـم الـمـسـتـخـدم غـيـر صـحـيـح 🖤.")
-    except Exception as e:
-        logging.error(f"Unban error: {e}")
-        await update.message.reply_text("حدث خطأ في فك الحظر 🖤.")
 
 async def admin_stats(update: Update, context: CallbackContext):
-    try:
-        user_id = update.effective_user.id
-        
-        if user_id != ADMIN_ID:
-            await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
-            return
-        
-        total_users = get_user_count()
-        stats_text = f"""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("هـذا الامـر للمـطـور فـقـط 🖤.")
+        return
+    
+    total_users = get_user_count()
+    stats_text = f"""
 📊 إحـصـائـيـات الـبـوت 🖤:
 
 👥 عـدد الـمـسـتـخـدمـيـن: {total_users} 🖤.
 📅 تـاريـخ الـيـوم: {datetime.now().strftime('%Y/%m/%d')} 🖤.
 ⚡ الـبـوت مـشـغـل بـ Groq AI 🖤.
-        """
-        await update.message.reply_text(stats_text)
-    
-    except Exception as e:
-        logging.error(f"Stats error: {e}")
-        await update.message.reply_text("حدث خطأ في جلب الإحصائيات 🖤.")
+    """
+    await update.message.reply_text(stats_text)
 
 # معالجة الأزرار
 async def button_handler(update: Update, context: CallbackContext):
-    try:
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = update.effective_user.id
-        
-        if not await check_subscription(user_id, context):
-            await query.edit_message_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
-            return
-        
-        if query.data == "check_subscription":
-            if await check_subscription(user_id, context):
-                await query.edit_message_text("شـكـراً لاشـتـراكـك 🖤.\nاسـتـخـدم /start لـبـدء الاسـتـخـدام 🖤.")
-            else:
-                await query.edit_message_text("لـم يـتـم الاشـتـراك بـعـد 🖤.\nاشـتـرك ثـم اعـد المحاولة 🖤.")
-        
-        elif query.data == "solve_math":
-            await query.edit_message_text("ارسـل الـمـسـألـة الـريـاضـيـة 🧮.\nوسـأحـاول حـلـهـا لـك 🖤.")
-        
-        elif query.data == "explain_lesson":
-            await query.edit_message_text("ارسـل الـدرس الـذي تـريـد شـرحـه 📚.\nوسـأقـوم بـشـرحـه لـك 🖤.")
-        
-        elif query.data == "help":
-            help_text = """
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    
+    if not await check_subscription(user_id, context):
+        await query.edit_message_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
+        return
+    
+    if query.data == "check_subscription":
+        if await check_subscription(user_id, context):
+            await query.edit_message_text("شـكـراً لاشـتـراكـك 🖤.\nاسـتـخـدم /start لـبـدء الاسـتـخـدام 🖤.")
+        else:
+            await query.edit_message_text("لـم يـتـم الاشـتـراك بـعـد 🖤.\nاشـتـرك ثـم اعـد المحاولة 🖤.")
+    
+    elif query.data == "solve_math":
+        await query.edit_message_text("ارسـل الـمـسـألـة الـريـاضـيـة 🧮.\nوسـأحـاول حـلـهـا لـك 🖤.")
+    
+    elif query.data == "explain_lesson":
+        await query.edit_message_text("ارسـل الـدرس الـذي تـريـد شـرحـه 📚.\nوسـأقـوم بـشـرحـه لـك 🖤.")
+    
+    elif query.data == "help":
+        help_text = """
 🆘 الـمـسـاعـدة 🖤:
 
 • لـحـل مـسـألـة: اخـتـر "حـل مـسـألـة" 🖤.
@@ -424,71 +379,31 @@ async def button_handler(update: Update, context: CallbackContext):
 • للاتـصـال بـالـمـطـور: @TepthonHelp 🖤.
 
 ⚡ الـبـوت مـشـغـل بـ Groq AI 🖤.
-            """
-            await query.edit_message_text(help_text)
-    
-    except Exception as e:
-        logging.error(f"Button handler error: {e}")
-        # Fallback: send new message if edit fails
-        try:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="عذراً، حدث خطأ 🖤. حاول استخدام /start مرة أخرى."
-            )
-        except:
-            pass
-
-# معالجة الأخطاء العامة
-async def error_handler(update: Update, context: CallbackContext):
-    logging.error(f"Exception while handling an update: {context.error}")
-    
-    try:
-        if update and update.effective_chat:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="عذراً، حدث خطأ غير متوقع 🖤. حاول مرة أخرى."
-            )
-    except:
-        pass
+        """
+        await query.edit_message_text(help_text)
 
 # إعداد البوت الرئيسي
 def main():
-    try:
-        init_db()
-        
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # إضافة معالج الأخطاء
-        application.add_error_handler(error_handler)
-        
-        # handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("broadcast", admin_broadcast))
-        application.add_handler(CommandHandler("ban", admin_ban))
-        application.add_handler(CommandHandler("unban", admin_unban))
-        application.add_handler(CommandHandler("stats", admin_stats))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(MessageHandler(filters.PHOTO, handle_image))
-        application.add_handler(CallbackQueryHandler(button_handler))
-        
-        # تشغيل البوت
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
+    init_db()
     
-    except Exception as e:
-        logging.error(f"Bot startup error: {e}")
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("broadcast", admin_broadcast))
+    application.add_handler(CommandHandler("ban", admin_ban))
+    application.add_handler(CommandHandler("unban", admin_unban))
+    application.add_handler(CommandHandler("stats", admin_stats))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_image))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    
+    # تشغيل البوت
+    application.run_polling()
 
 @app.route('/')
 def home():
     return "البوت يعمل بنجاح 🖤. - مشغل بـ Groq AI"
 
-@app.route('/health')
-def health():
-    return "OK"
-
 if __name__ == '__main__':
-    # تشغيل Flask على منفذ 10000 ليتوافق مع Render
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    main()
