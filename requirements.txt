@@ -2,3 +2,5 @@ python-telegram-bot[job-queue]==21.7
 flask==2.3.3
 requests==2.31.0
 python-dotenv==1.0.0
+pytesseract
+Pillow
