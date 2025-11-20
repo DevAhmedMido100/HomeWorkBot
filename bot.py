@@ -8,7 +8,10 @@ from telegram.error import TelegramError
 import requests
 import json
 from flask import Flask
-import base64  # لتحويل الصورة إلى base64 قبل إرسالها إلى Groq
+
+# إضافات للـ OCR
+from PIL import Image
+import pytesseract
 
 # إعدادات البوت
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -73,8 +76,8 @@ def send_message_to_admin(message):
             f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
             json={'chat_id': ADMIN_ID, 'text': message}
         )
-    except Exception as e:
-        logging.error(f"send_message_to_admin error: {e}")
+    except:
+        pass
 
 def get_user_count():
     conn = sqlite3.connect('bot_data.db')
@@ -111,11 +114,10 @@ async def check_subscription(user_id, context: CallbackContext):
     try:
         chat_member = await context.bot.get_chat_member('@TepthonHelp', user_id)
         return chat_member.status in ['member', 'administrator', 'creator']
-    except TelegramError as e:
-        logging.error(f"check_subscription error: {e}")
+    except TelegramError:
         return False
 
-# الذكاء الاصطناعي باستخدام Groq API (نصوص)
+# الذكاء الاصطناعي باستخدام Groq API
 async def call_groq_api(prompt, is_math=False):
     try:
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -146,7 +148,7 @@ async def call_groq_api(prompt, is_math=False):
                     "content": prompt
                 }
             ],
-            "model": "llama-3.1-8b-instant",  # نموذج نصي
+            "model": "llama-3.1-8b-instant",  # نموذج نصي Groq كما في الكود القديم
             "temperature": 0.3,
             "max_tokens": 1024,
             "top_p": 1,
@@ -157,109 +159,20 @@ async def call_groq_api(prompt, is_math=False):
         
         if response.status_code == 200:
             result = response.json()
+            # حماية من بنى استجابة غير متوقعة
             try:
                 return result['choices'][0]['message']['content']
             except Exception:
                 return json.dumps(result)
         else:
-            logging.error(f"call_groq_api HTTP {response.status_code}: {response.text}")
+            logging.error(f"Groq API HTTP {response.status_code}: {response.text}")
             return f"عذراً، حدث خطأ في المعالجة 🖤. رمز الخطأ: {response.status_code}"
             
     except Exception as e:
         logging.error(f"Groq API error: {e}")
         return f"عذراً، حدث خطأ في الاتصال 🖤. حاول مرة أخرى."
 
-# ---- الدالة الرئيسية: إرسال صورة + prompt إلى Groq Vision (محاولة صيغ متعددة للتماشي مع API) ----
-async def call_groq_api_with_image(image_path, prompt_text):
-    """
-    يحاول إرسال الصورة إلى Groq Vision بصيغتين مختلفتين للـ payload.
-    - تأكد أن مفتاح GROQ_API_KEY عندك يدعم موديلات الرؤية.
-    - عدّل 'model' إذا لدى حسابك اسم موديل رؤية مختلف.
-    """
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    # اقرأ وحوّل الصورة إلى base64
-    try:
-        with open(image_path, "rb") as f:
-            img_bytes = f.read()
-        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-    except Exception as e:
-        logging.error(f"Error reading image for base64: {e}")
-        return "عذراً، حدث خطأ في قراءة الصورة 🖤."
-
-    # حاول الصيغة (A): تضمين الحقل "image" داخل رسالة role=user
-    payload_a = {
-        "model": "llama-3.2-90b-vision-preview",  # عدّل لو موديلك مختلف
-        "temperature": 0.2,
-        "max_tokens": 1500,
-        "top_p": 1,
-        "stream": False,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt_text,
-                "image": f"data:image/jpeg;base64,{img_b64}"
-            }
-        ]
-    }
-
-    try:
-        resp = requests.post(url, headers=headers, json=payload_a, timeout=60)
-        if resp.status_code == 200:
-            j = resp.json()
-            try:
-                return j['choices'][0]['message']['content']
-            except Exception:
-                return json.dumps(j)
-        else:
-            logging.warning(f"Groq image attempt A HTTP {resp.status_code}: {resp.text}")
-    except Exception as e:
-        logging.error(f"Groq image attempt A exception: {e}")
-
-    # إذا فشل، حاول الصيغة (B): content كقائمة عناصر input_image + input_text
-    payload_b = {
-        "model": "llama-3.2-90b-vision-preview",
-        "temperature": 0.2,
-        "max_tokens": 1500,
-        "top_p": 1,
-        "stream": False,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_image", "image": f"data:image/jpeg;base64,{img_b64}"},
-                    {"type": "input_text", "text": prompt_text}
-                ]
-            }
-        ]
-    }
-
-    try:
-        resp = requests.post(url, headers=headers, json=payload_b, timeout=60)
-        if resp.status_code == 200:
-            j = resp.json()
-            try:
-                return j['choices'][0]['message']['content']
-            except Exception:
-                return json.dumps(j)
-        else:
-            logging.error(f"Groq image attempt B HTTP {resp.status_code}: {resp.text}")
-            # حاول قراءة الخطأ التفصيلي وإرجاعه للمستخدم بصيغة مفهومة
-            try:
-                err_body = resp.json()
-                logging.error(f"Groq error body: {err_body}")
-                return f"عذراً، فشل Groq في معالجة الصورة 🖤. رمز الخطأ: {resp.status_code}"
-            except Exception:
-                return f"عذراً، فشل Groq في معالجة الصورة 🖤. رمز الخطأ: {resp.status_code}"
-    except Exception as e:
-        logging.error(f"Groq image attempt B exception: {e}")
-        return "عذراً، فشل إرسال الصورة إلى نموذج Groq 🖤."
-
-# معالجة النصوص والصور (القديمة)
+# معالجة النصوص (لم يتغير) — الصور سنعالجها في handle_image باستخدام pytesseract
 async def call_ai_api(text=None, image_url=None):
     try:
         if text:
@@ -271,10 +184,10 @@ async def call_ai_api(text=None, image_url=None):
             return response
         
         elif image_url:
-            return "تم استلام الصورة بنجاح 🖤.\nحاليا لا يدعم البوت تحليل الصور، لكن يمكنك وصف المحتوى المكتوب في الصورة وسأساعدك 🖤."
+            return "تم استلام الصورة بنجاح 🖤.\nحاليا لا يدعم البوت تحليل الصور عبر هذه الدالة، أرسلها كصورة وسيتم معالجتها أوتوماتيكياً 🖤."
             
     except Exception as e:
-        logging.error(f"AI API error: {e}")
+        logging.error(f"call_ai_api error: {e}")
         return f"عذراً، حدث خطأ في المعالجة 🖤. حاول مرة أخرى."
 
 # أوامر البوت
@@ -343,7 +256,7 @@ async def handle_message(update: Update, context: CallbackContext):
     response = await call_ai_api(text=text)
     await update.message.reply_text(response)
 
-# **التعديل هنا فقط**: تحليل الصورة عبر Groq Vision وإرجاع حل/شرح
+# **تعديل بسيط هنا**: استخدام pytesseract لقراءة النص من الصورة (SCR) ثم إرسال النص إلى Groq لحله/شرحه
 async def handle_image(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     
@@ -358,35 +271,46 @@ async def handle_image(update: Update, context: CallbackContext):
         await update.message.reply_text("يـجـب الاشـتـراك في @TepthonHelp اولاً 🖤.")
         return
     
-    await update.message.reply_text("جـاري تـحـلـيـل الـصـورة وطلب الحل من Groq 🖤...")
+    await update.message.reply_text("جـاري تـحـلـيـل الـصـورة وقراءة النص 🖤.")
     
     try:
         # تنزيل الصورة
+        # نأخذ أعلى جودة متاحة من الصور المرسلة
         photo = update.message.photo[-1]
         file = await photo.get_file()
-        path = f"temp_image_{user_id}_{int(datetime.now().timestamp())}.jpg"
+        path = f"tmp_image_{user_id}_{int(datetime.now().timestamp())}.jpg"
         await file.download_to_drive(path)
         
-        # إعداد prompt واضح لطلب حل المسائل وشرحها باللغة العربية
-        prompt_text = (
-            "أنت مساعد تعليمي. في الصورة المرفقة يوجد سؤال/أسئلة مدرسية (رياضيات/فيزياء/كيمياء أو مسائل حسابية). "
-            "اقرأ ما في الصورة، استخرج كل مسألة، ثم: \n"
-            "1) اكتب النتيجة الصحيحة لكل مسألة.\n"
-            "2) اشرح خطوات الحل خطوة بخطوة بشكل واضح للطالب.\n"
-            "3) إذا كان هناك أخطاء شائعة، أشِر إليها ووضح التصحيح.\n"
-            "أجب باللغة العربية وبنبرة ودودة ومناسبة للطلاب."
-        )
+        # محاولة قراءة النص من الصورة باستخدام pytesseract
+        try:
+            img = Image.open(path)
+            # استخدم 'ara' لو منصب tesseract مع حزمة اللغة العربية
+            extracted_text = pytesseract.image_to_string(img, lang='ara').strip()
+        except Exception as e:
+            logging.error(f"OCR error: {e}")
+            extracted_text = ""
         
-        # استدعاء Groq مع الصورة والنص (تجربة صيغ متعددة داخل الدالة)
-        response = await call_groq_api_with_image(path, prompt_text)
-        
-        # حذف الملف المؤقت
+        # حذف الملف المؤقت مبكراً
         try:
             os.remove(path)
         except:
             pass
         
-        # تقسيم الرد لو طويل
+        if not extracted_text:
+            await update.message.reply_text("لم أستطع قراءة نص واضح من الصورة 🖤.\nحاول إرسال صورة أوضح أو اكتب السؤال يدوياً.")
+            return
+        
+        # إعلام المستخدم أننا سنحل الآن
+        await update.message.reply_text("جـاري فهـم الـمـسـألة وطلب الحل من Groq 🖤...")
+        
+        # نحدّد إن كانت مسألة رياضية لتفعيل الوضع الرياضي
+        math_keywords = ['رياضيات', 'مسألة', 'حل', 'سؤال', 'معادلة', 'جبر', 'هندسة', 'ناتج', 'حسب']
+        is_math = any(k in extracted_text.lower() for k in math_keywords)
+        
+        # استدعاء Groq بنفس الدالة الموجودة
+        response = await call_groq_api(extracted_text, is_math=is_math)
+        
+        # تقسيم الرد إذا كان طويلاً
         if isinstance(response, str) and len(response) > 4000:
             parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
             for part in parts:
@@ -424,8 +348,7 @@ async def admin_broadcast(update: Update, context: CallbackContext):
         try:
             await context.bot.send_message(user[0], f"📢 إشـعـار من المطور:\n\n{message}")
             success += 1
-        except Exception as e:
-            logging.error(f"broadcast send error to {user[0]}: {e}")
+        except:
             failed += 1
     
     await update.message.reply_text(f"تم الارسال 🖤.\nنجح: {success} 🖤.\nفشل: {failed} 🖤.")
@@ -475,7 +398,7 @@ async def admin_stats(update: Update, context: CallbackContext):
     
     total_users = get_user_count()
     stats_text = f"""
-📊 إحـصـائـيات الـبـوت 🖤:
+📊 إحـصـائـيـات الـبـوت 🖤:
 
 👥 عـدد الـمـسـتـخـدمـيـن: {total_users} 🖤.
 📅 تـاريـخ الـيـوم: {datetime.now().strftime('%Y/%m/%d')} 🖤.
@@ -543,3 +466,4 @@ def home():
 
 if __name__ == '__main__':
     main()
+```0
